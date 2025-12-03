@@ -1,0 +1,13 @@
+name: spyder
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - flask
+      - flask-cors
+      - pandas
+      - xlsxwriter
+      - requests
+      - pillow
