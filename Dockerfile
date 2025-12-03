@@ -3,7 +3,7 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# 安装系统依赖（主要给 pillow 用）
+# 安装 pillow 依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libjpeg62-turbo-dev \
@@ -17,9 +17,10 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# 复制项目文件
+# 复制整个项目（包括 app/）
 COPY . .
 
 EXPOSE 5000
 
-CMD ["python", "server.py"]
+# 关键修改：从包 app 里启动 server.py
+CMD ["python", "-m", "app.server"]
