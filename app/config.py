@@ -1,5 +1,6 @@
 # backend/app/config.py
 import os
+from datetime import timedelta
 
 
 class Config:
@@ -7,11 +8,10 @@ class Config:
     DEBUG = os.environ.get("FLASK_DEBUG", "0") == "1"
     # Access Token：短有效期（比如 30 分钟）
     JWT_ACCESS_SECRET = os.environ.get("JWT_ACCESS_SECRET", "dev-access-secret")
-    JWT_ACCESS_EXPIRES_MINUTES = int(os.environ.get("JWT_ACCESS_EXPIRES_MINUTES", 30))
-
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=1)  # Access Token 的过期时间
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)  # Refresh Token 的过期时间
     # Refresh Token：长有效期（比如 7 天）
     JWT_REFRESH_SECRET = os.environ.get("JWT_REFRESH_SECRET", "dev-refresh-secret")
-    JWT_REFRESH_EXPIRES_DAYS = int(os.environ.get("JWT_REFRESH_EXPIRES_DAYS", 7))
 
     # ========== MySQL（SQLAlchemy） ==========
     SQLALCHEMY_DATABASE_URI = os.environ.get(
@@ -32,6 +32,8 @@ class Config:
     MINIO_SECURE = os.environ.get("MINIO_SECURE", "false").lower() == "true"
     MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "files")
 
+    BACKEND_PUBLIC= os.environ.get("BACKEND_PUBLIC", "http://192.168.31.138:5000")
+
     # MinIO 对外访问前缀（给前端 / OnlyOffice 用）
     MINIO_PUBLIC_BASE = os.environ.get(
         "MINIO_PUBLIC_BASE",
@@ -39,7 +41,7 @@ class Config:
     )
 
     # ========== OnlyOffice Document Server ==========
-    ONLYOFFICE_DOC_SERVER = os.environ.get(
+    ONLYOFFICE_BASE_URL  = os.environ.get(
         "ONLYOFFICE_DOC_SERVER",
         "http://192.168.31.145:8080"        # Docker 环境下会改成 http://onlyoffice
     )
@@ -47,8 +49,9 @@ class Config:
         "ONLYOFFICE_JWT_SECRET",
         "MyJWTSecretKey123"
     )
-
-
+    ONLYOFFICE_FILE_DIR = os.environ.get("ONLYOFFICE_FILE_DIR","D:\dev")
+    ONLYOFFICE_VERIFY_INBOX=False
+    DOCUMENT_SERVER_COMMAND_URL =os.environ.get("DOCUMENT_SERVER_COMMAND_URL", "http://192.168.31.145:8080/coauthoring/CommandService.ashx")
 class DevConfig(Config):
     DEBUG = True
 

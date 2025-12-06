@@ -59,3 +59,5 @@ def rename_folder(folder_id):
 @bp.route("/folders/<int:folder_id>", methods=["DELETE"])
 def delete_folder(folder_id):
     return kb_service.delete_folder(folder_id)
+
+

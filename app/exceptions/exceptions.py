@@ -4,3 +4,11 @@ class CustomAPIException(Exception):
         self.message = message
         self.status_code = status_code
         self.code = code
+
+from flask_jwt_extended import JWTManager
+
+jwt = JWTManager()
+
+def init_extensions(app):
+    # 你的其他扩展...
+    jwt.init_app(app)

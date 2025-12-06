@@ -171,3 +171,39 @@ def delete_object(bucket: str, object_key: str) -> None:
         client.remove_object(bucket_name=bucket, object_name=object_key)
     except S3Error as e:
         raise RuntimeError("Failed to delete object from MinIO") from e
+
+# app/utils/minio_storage.py
+# (保留你原有的 import 和函数，在文件末尾添加以下内容)
+
+# ... (上面的代码保持不变: get_minio_client, generate_presigned_url 等) ...
+
+def get_object_stream(bucket: str, object_key: str):
+    """
+    【新增】直接获取 MinIO 文件流（用于 Flask 代理下载）
+    返回: MinIO 的 response 对象 (类似 file-like object)
+    """
+    client = get_minio_client()
+    try:
+        # get_object 返回的是 urllib3.response.HTTPResponse
+        # 它可以被 Flask 的 send_file 直接使用
+        return client.get_object(bucket_name=bucket, object_name=object_key)
+    except S3Error as e:
+        raise RuntimeError(f"Failed to get object stream: {object_key}") from e
+
+def upload_stream(bucket: str, object_key: str, data, length: int, content_type: str = "application/octet-stream"):
+    """
+    【新增】直接上传流数据到 MinIO（用于回调保存）
+    data: bytes 或 file-like object
+    """
+    client = get_minio_client()
+    _ensure_bucket_exists(client, bucket)
+    try:
+        client.put_object(
+            bucket_name=bucket,
+            object_name=object_key,
+            data=data,
+            length=length,
+            content_type=content_type
+        )
+    except S3Error as e:
+        raise RuntimeError(f"Failed to upload stream: {object_key}") from e

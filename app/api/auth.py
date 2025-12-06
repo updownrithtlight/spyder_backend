@@ -1,225 +1,190 @@
-
 # backend/app/api/auth.py
-from datetime import datetime, timedelta, timezone
+from flask import Blueprint, request, make_response, current_app
+from flask_jwt_extended import (
+    create_access_token, create_refresh_token,
+    set_access_cookies, set_refresh_cookies,
+    jwt_required, get_jwt_identity, get_jwt, unset_jwt_cookies
+)
 
-import jwt
-from flask import Blueprint, current_app, jsonify, request, make_response
-
-from ..models import User
+from app.extensions import db  # 你在 extensions.py 里定义的 db、jwt
+from app.models.user import User
+from app.models.result import ResponseTemplate
+from app.exceptions.exceptions import CustomAPIException
 
 bp = Blueprint("auth", __name__)
 
 
-# --------- 工具函数 --------- #
+# ========== 用户注册（可选） ==========
 
-def _now_utc():
-    return datetime.now(timezone.utc)
-
-
-def _create_access_token(user: User) -> str:
-    """短期 Access Token：放到响应 JSON，让前端存 sessionStorage"""
-    now = _now_utc()
-    minutes = current_app.config["JWT_ACCESS_EXPIRES_MINUTES"]
-    payload = {
-        "sub": user.id,
-        "username": user.username,
-        "type": "access",
-        "iat": now,
-        "exp": now + timedelta(minutes=minutes),
-    }
-    secret = current_app.config["JWT_ACCESS_SECRET"]
-    token = jwt.encode(payload, secret, algorithm="HS256")
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
-    return token
-
-
-def _create_refresh_token(user: User) -> str:
-    """长期 Refresh Token：只放在 HttpOnly Cookie 中"""
-    now = _now_utc()
-    days = current_app.config["JWT_REFRESH_EXPIRES_DAYS"]
-    payload = {
-        "sub": user.id,
-        "username": user.username,
-        "type": "refresh",
-        "iat": now,
-        "exp": now + timedelta(days=days),
-    }
-    secret = current_app.config["JWT_REFRESH_SECRET"]
-    token = jwt.encode(payload, secret, algorithm="HS256")
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
-    return token
-
-
-def _decode_access_token(token: str):
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(
-            token,
-            current_app.config["JWT_ACCESS_SECRET"],
-            algorithms=["HS256"],
-        )
-        if payload.get("type") != "access":
-            return None
-        return payload
-    except jwt.InvalidTokenError:
-        return None
-
-
-def _decode_refresh_token(token: str):
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(
-            token,
-            current_app.config["JWT_REFRESH_SECRET"],
-            algorithms=["HS256"],
-        )
-        if payload.get("type") != "refresh":
-            return None
-        return payload
-    except jwt.InvalidTokenError:
-        return None
-
-
-def _set_refresh_cookie(resp, refresh_token: str):
+@bp.route("/register", methods=["POST"])
+def register():
     """
-    把 refresh_token 写到 HttpOnly Cookie.
-    dev 环境先不用 secure=True，线上用 https 时一定要 secure=True
+    注册用户（如果不需要可删掉）：
+    body: { "username": "...", "password": "...", "user_fullname": "..." }
     """
-    max_age = current_app.config["JWT_REFRESH_EXPIRES_DAYS"] * 24 * 3600
-    resp.set_cookie(
-        "refresh_token",
-        refresh_token,
-        max_age=max_age,
-        httponly=True,
-        samesite="Lax",
-        secure=False,  # 本地开发 http；上线 https 请改 True
-        path="/",
-    )
+    data = request.get_json() or {}
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+    user_fullname = (data.get("user_fullname") or "").strip()
+
+    if not username or not password:
+        raise CustomAPIException("用户名和密码不能为空", 400)
+
+    if User.query.filter_by(username=username).first():
+        raise CustomAPIException("用户名已存在", 400)
+
+    # 假设 User 有 set_password / check_password 方法
+    user = User(username=username, user_fullname=user_fullname or username)
+    user.set_password(password)
+
+    try:
+        db.session.add(user)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        raise CustomAPIException(f"数据库错误: {e}", 500)
+
+    return ResponseTemplate.success(message="注册成功")
 
 
-def _clear_refresh_cookie(resp):
-    resp.set_cookie(
-        "refresh_token",
-        "",
-        expires=0,
-        path="/",
-    )
-
-
-# --------- 路由 --------- #
+# ========== 登录 ==========
 
 @bp.route("/login", methods=["POST"])
 def login():
-    """
-    登录：
-    body:
-    {
-      "username": "bill",
-      "password": "123456"
-    }
 
-    返回：
-    {
-      "access_token": "...",
-      "user": {...}
-    }
-    同时在 Set-Cookie 里下发 refresh_token（HttpOnly）
-    """
     data = request.get_json() or {}
-    username = data.get("username")
-    password = data.get("password")
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
 
     if not username or not password:
-        return jsonify({"error": "username and password required"}), 400
+        return ResponseTemplate.error("username and password required", code=400)
 
     user = User.query.filter_by(username=username).first()
     if not user or not user.check_password(password):
-        return jsonify({"error": "invalid username or password"}), 401
+        return ResponseTemplate.error("Invalid username or password", code=401)
 
-    if user.status != "active":
-        return jsonify({"error": "user disabled"}), 403
-
-    access_token = _create_access_token(user)
-    refresh_token = _create_refresh_token(user)
+    if getattr(user, "status", "active") != "active":
+        return ResponseTemplate.error("账号被禁用，请联系管理员", code=403)
+    # identity 建议只放 id，其余信息放到 claims 里
+    access_token = create_access_token(
+        identity=str(user.id),
+        additional_claims={"username": user.username},
+        expires_delta=current_app.config.get("JWT_ACCESS_TOKEN_EXPIRES"),
+    )
+    refresh_token = create_refresh_token(
+        identity=str(user.id),
+        additional_claims={"username": user.username},
+        expires_delta=current_app.config.get("JWT_REFRESH_TOKEN_EXPIRES"),
+    )
 
     resp = make_response(
-        jsonify(
-            {
-                "access_token": access_token,
+        ResponseTemplate.success(
+            message="Login successful",
+            data={
+                "access_token": access_token,  # 方便前端调试用，不一定要存
                 "user": user.to_dict(),
-            }
+            },
         )
     )
-    _set_refresh_cookie(resp, refresh_token)
-    return resp
+    # 写入 HttpOnly Cookie
+    set_access_cookies(resp, access_token)
+    set_refresh_cookies(resp, refresh_token)
+    return resp, 200
 
+
+# ========== 刷新 Access Token（用 refresh cookie） ==========
 
 @bp.route("/refresh-token", methods=["POST"])
+@jwt_required(refresh=True)
 def refresh_token():
     """
     刷新 Access Token：
-    - 从 Cookie 里读 refresh_token
-    - 校验成功则生成新的 access_token（可选择是否轮换 refresh_token）
-    返回：
-    {
-      "access_token": "..."
-    }
+    - 自动从 refresh_token_cookie 读 refresh token
+    - 校验成功后发新的 access token，并写回 cookie
     """
-    token = request.cookies.get("refresh_token")
-    payload = _decode_refresh_token(token)
-    if not payload:
-        return jsonify({"error": "invalid or expired refresh token"}), 401
+    ident = get_jwt_identity()  # 字符串 id
+    claims = get_jwt()          # 里有 username 等
 
-    user = User.query.get(payload.get("sub"))
-    if not user:
-        return jsonify({"error": "user not found"}), 404
+    new_access = create_access_token(
+        identity=ident,
+        additional_claims={"username": claims.get("username")},
+        expires_delta=current_app.config.get("JWT_ACCESS_TOKEN_EXPIRES"),
+    )
 
-    # 生成新的 access_token
-    access_token = _create_access_token(user)
+    resp = make_response(
+        ResponseTemplate.success(message="Access token refreshed")
+    )
+    set_access_cookies(resp, new_access)
+    return resp, 200
 
-    # 是否轮换 refresh_token，看你需要，这里简单起见不轮换
-    resp = make_response(jsonify({"access_token": access_token}))
-    # 如果想轮换，可以重新生成并写 cookie:
-    # new_refresh = _create_refresh_token(user)
-    # _set_refresh_cookie(resp, new_refresh)
 
-    return resp
-
+# ========== 获取当前用户信息 ==========
 
 @bp.route("/me", methods=["GET"])
+@jwt_required()
 def me():
     """
-    获取当前登录用户：
-    Header: Authorization: Bearer <access_token>
+    获取当前登录用户信息：
+    - 优先从 cookie 检测 JWT（flask-jwt-extended 默认行为）
     """
-    auth_header = request.headers.get("Authorization", "")
-    parts = auth_header.split()
-    if len(parts) == 2 and parts[0].lower() == "bearer":
-        token = parts[1]
-    else:
-        token = None
-
-    payload = _decode_access_token(token)
-    if not payload:
-        return jsonify({"error": "invalid or expired token"}), 401
-
-    user_id = payload.get("sub")
-    user = User.query.get(user_id)
+    identity = get_jwt_identity()  # 字符串 id
+    user = User.query.get(int(identity)) if identity else None
     if not user:
-        return jsonify({"error": "user not found"}), 404
+        raise CustomAPIException("用户不存在", 404)
 
-    return jsonify({"user": user.to_dict()})
+    return ResponseTemplate.success(
+        data=user.to_dict(),
+        message="User details retrieved successfully",
+    )
 
+
+# ========== 修改密码（示例） ==========
+
+@bp.route("/update-password", methods=["POST"])
+@jwt_required()
+def update_password():
+    """
+    修改密码：
+    body:
+    {
+      "currentPassword": "...",
+      "newPassword": "..."
+    }
+    """
+    data = request.get_json() or {}
+    current_password = data.get("currentPassword") or ""
+    new_password = data.get("newPassword") or ""
+
+    if not current_password or not new_password:
+        raise CustomAPIException("当前密码和新密码不能为空", 400)
+
+    identity = get_jwt_identity()
+    user = User.query.get(int(identity)) if identity else None
+    if not user:
+        raise CustomAPIException("用户不存在", 404)
+
+    if not user.check_password(current_password):
+        raise CustomAPIException("当前密码错误", 401)
+
+    try:
+        user.set_password(new_password)
+        db.session.add(user)
+        db.session.commit()
+        return ResponseTemplate.success(message="Password updated successfully")
+    except Exception as e:
+        db.session.rollback()
+        raise CustomAPIException(f"Failed to update password: {e}", 500)
+
+
+# ========== 退出登录 ==========
 
 @bp.route("/logout", methods=["POST"])
 def logout():
     """
-    退出登录：清空 refresh_token cookie，前端自己删掉 access_token
+    退出登录：
+    - 清空 access / refresh cookie
+    - 前端自己丢弃本地保存的 access_token（如果有）
     """
-    resp = make_response(jsonify({"message": "logout ok"}))
-    _clear_refresh_cookie(resp)
-    return resp
+    resp = make_response(ResponseTemplate.success(message="Logged out"))
+    unset_jwt_cookies(resp)
+    return resp, 200

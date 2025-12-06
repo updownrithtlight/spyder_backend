@@ -513,3 +513,4 @@ def delete_folder(folder_id):
         message="文件夹及其所有内容删除成功",
         data={"id": folder.id}
     )
+

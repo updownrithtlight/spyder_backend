@@ -26,8 +26,19 @@ def create_app(config_name: str = "dev") -> Flask:
     # CORS 设置（保持你原来的配置）
     CORS(
         app,
-        resources={r"/api/*": {"origins": "http://localhost:5173"}},
         supports_credentials=True,
+        resources={
+            r"/*": {
+                "origins": [
+                    "http://localhost:5173",
+                    r"http://192\.168\.\d+\.\d+(:\d+)?",  # 内网段
+                    r"http://10\.\d+\.\d+\.\d+(:\d+)?",
+                    r"http://172\.(1[6-9]|2\d|3[0-1])\.\d+.\d+(:\d+)?",
+                    "https://your.domain.com",  # 你的域名（如有）
+                ]
+            }
+        },
+        expose_headers=["Content-Disposition"],
     )
 
     # 加载配置
